@@ -45,7 +45,7 @@ public final class SettingsStore: ObservableObject {
     public let notificationPreferences: NotificationPreferences
     public let fileURL: URL?
 
-    public static var defaultFileURL: URL {
+    nonisolated public static var defaultFileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/iPhoneBackupHelper/settings.json")
     }
