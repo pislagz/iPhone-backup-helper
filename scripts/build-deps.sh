@@ -151,7 +151,7 @@ done
 # Licenses
 copylic() { # name file...
   local name="$1"; shift; mkdir -p "$VENDOR/licenses/$name"
-  for f in "$@"; do [[ -f "$f" ]] && cp "$f" "$VENDOR/licenses/$name/"; done
+  for f in "$@"; do if [[ -f "$f" ]]; then cp "$f" "$VENDOR/licenses/$name/"; fi; done
 }
 copylic libplist "$SRC/libplist/COPYING" "$SRC/libplist/COPYING.LESSER"
 copylic libimobiledevice-glue "$SRC/glue/COPYING" "$SRC/glue/COPYING.LESSER"
