@@ -68,6 +68,14 @@ public final class DeviceMonitor: ObservableObject {
         return true
     }
 
+    /// Re-reads the device list and every present device's details now (after wake from sleep, when the
+    /// list we hold is from before the sleep). Returns when the list has been refreshed; the detail
+    /// reads finish a little later.
+    public func refreshNow() async {
+        registry.requestReprobe(now: clock())
+        await tick()
+    }
+
     /// Re-read backup dates and Full Disk Access status on the next tick.
     public func refreshBackupFolderSoon() {
         nextFolderCheck = .distantPast

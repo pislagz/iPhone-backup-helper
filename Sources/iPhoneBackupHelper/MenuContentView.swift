@@ -34,6 +34,7 @@ struct MenuContentView: View {
                         device: device,
                         job: backups.jobs[device.udid],
                         result: backups.results[device.udid],
+                        queuePosition: backups.queuePosition(device.udid),
                         canStart: backups.canStart(device),
                         scheduleText: scheduler.statusText(for: device.udid),
                         onBackUp: { backups.start(device) },
@@ -52,6 +53,7 @@ struct MenuContentView: View {
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
+                    .help(backups.isBusy ? "A backup is running: it will be cancelled cleanly first." : "Quit")
             }
         }
         .padding(12)

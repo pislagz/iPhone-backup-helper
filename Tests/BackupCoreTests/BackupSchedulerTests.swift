@@ -47,6 +47,20 @@ private final class RecordingEngine: BackupEngine, @unchecked Sendable {
     }
 }
 
+/// Reports "device busy" until `busy` is switched off, then succeeds.
+private final class BusyEngine: BackupEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _busy = true
+    var busy: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _busy }
+        set { lock.lock(); _busy = newValue; lock.unlock() }
+    }
+    func backup(_ target: BackupTarget, progress: @escaping @Sendable (BackupProgress) -> Void) async throws -> BackupSummary {
+        if busy { throw BackupError.deviceBusy }
+        return BackupSummary(duration: 1, bytesWritten: 1)
+    }
+}
+
 @MainActor
 final class BackupSchedulerTests: XCTestCase {
     private var calendar: Calendar = {
@@ -254,6 +268,159 @@ final class BackupSchedulerTests: XCTestCase {
         await waitUntil { self.controller.jobs.isEmpty }
     }
 
+    // MARK: - M4
+
+    func testSecondDeviceIsQueuedShowsQueuedAndRunsAfterTheFirst() async {
+        build()
+        engine.behavior = .hold
+        devices = [device("A"), device("B")]
+        settings["A"] = enabledSettings()
+        settings["B"] = enabledSettings()
+        scheduler.evaluate()
+        await waitUntil { !self.engine.targets.isEmpty }
+        XCTAssertTrue(controller.isQueued("B"))
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Backup in progress")
+        XCTAssertEqual(scheduler.statusText(for: "B"), "Queued: waiting for the running backup to finish")
+        scheduler.evaluate()
+        XCTAssertEqual(engine.targets.count, 1, "evaluating again does not queue or start it twice")
+        XCTAssertEqual(controller.queue, ["B"])
+
+        await engine.gate.release()
+        await waitUntil { self.controller.jobs.isEmpty && self.controller.queue.isEmpty }
+        XCTAssertEqual(engine.targets.map(\.udid), ["A", "B"])
+    }
+
+    func testManualBackupAndSchedulerShareTheQueue() async {
+        build()
+        engine.behavior = .hold
+        devices = [device("A"), device("B")]
+        settings["B"] = enabledSettings()
+        XCTAssertTrue(controller.start(devices[0])) // manual, device A has automatic backups off
+        scheduler.evaluate()
+        XCTAssertTrue(controller.isQueued("B"))
+        await engine.gate.release()
+        await waitUntil { self.controller.jobs.isEmpty && self.controller.queue.isEmpty }
+        XCTAssertEqual(engine.targets.map(\.udid), ["A", "B"])
+    }
+
+    func testStartsAreHeldUntilTheDeviceListIsFreshAfterWake() async {
+        build()
+        devices = [device("A")]
+        settings["A"] = enabledSettings()
+        scheduler.holdStarts(for: 60)
+        scheduler.evaluate()
+        XCTAssertTrue(controller.jobs.isEmpty)
+        XCTAssertTrue(engine.targets.isEmpty)
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Waiting: checking devices after wake-up")
+
+        scheduler.releaseStarts()
+        XCTAssertTrue(controller.isRunning("A"))
+        await waitUntil { self.controller.jobs.isEmpty }
+    }
+
+    func testADeviceThatLeftDuringSleepNeverGetsAFailedAttempt() async {
+        build()
+        devices = [device("A")] // stale pre-sleep list
+        settings["A"] = enabledSettings()
+        scheduler.holdStarts(for: 60)
+        scheduler.evaluate()
+        devices = [device("A", reachable: false)] // the refreshed list: it was unplugged during sleep
+        scheduler.releaseStarts()
+        XCTAssertTrue(engine.targets.isEmpty)
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Waiting: iPhone not connected")
+        XCTAssertNil(controller.lastFailedAttempt(for: "A"), "so no retry interval delays the real backup")
+
+        devices = [device("A")] // plugged back in
+        scheduler.evaluate()
+        XCTAssertTrue(controller.isRunning("A"))
+        await waitUntil { self.controller.jobs.isEmpty }
+    }
+
+    func testTheHoldExpiresByItself() async {
+        build()
+        devices = [device("A")]
+        settings["A"] = enabledSettings()
+        scheduler.holdStarts(for: 60)
+        XCTAssertTrue(scheduler.startsAreHeld)
+        clock.advance(61)
+        XCTAssertFalse(scheduler.startsAreHeld)
+        scheduler.evaluate()
+        XCTAssertTrue(controller.isRunning("A"))
+        await waitUntil { self.controller.jobs.isEmpty }
+    }
+
+    func testARefusedStartShowsAReasonInsteadOfStartingForever() async {
+        build()
+        devices = [device("A")]
+        settings["A"] = enabledSettings()
+        await controller.shutdown(timeout: 1) // the app is quitting: the controller refuses everything
+        scheduler.evaluate()
+        XCTAssertTrue(engine.targets.isEmpty)
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Waiting: the app is quitting")
+    }
+
+    func testBusyDeviceIsRetriedAfterTheRetryInterval() async {
+        build()
+        let busy = BusyEngine()
+        let clock = self.clock!
+        controller = BackupController(
+            engine: busy, notifier: nil, sleepBlocker: nil, history: BackupHistoryStore(fileURL: nil),
+            clock: { clock.now })
+        scheduler = BackupScheduler(
+            controller: controller, devices: { [unowned self] in self.devices },
+            settings: { [unowned self] in self.settings[$0] ?? DeviceSettings() },
+            lastBackup: { _ in nil }, macState: { MacState() },
+            clock: { clock.now }, calendar: { [unowned self] in self.calendar })
+        devices = [device("A")]
+        settings["A"] = enabledSettings()
+        scheduler.evaluate()
+        await waitUntil { self.controller.jobs.isEmpty }
+        XCTAssertEqual(controller.results["A"]?.kind, .deviceBusy)
+        scheduler.evaluate()
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Waiting: retry in 30 min")
+        clock.advance(31 * 60) // 21:31, still in the window
+        busy.busy = false
+        scheduler.evaluate()
+        await waitUntil { self.controller.jobs.isEmpty }
+        XCTAssertEqual(controller.results["A"]?.kind, .success(bytes: 1))
+    }
+
+    func testASuccessIsStillKnownAfterARestartWithoutFullDiskAccess() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("state.json")
+        build(historyFile: file)
+        devices = [device("A")]
+        settings["A"] = enabledSettings()
+        scheduler.evaluate()
+        await waitUntil { self.controller.jobs.isEmpty }
+        XCTAssertEqual(engine.targets.count, 1)
+
+        // The app restarts a few minutes later: new controller and scheduler, same state file, and
+        // Status.plist is unreadable (lastBackup provider returns nil).
+        build(at: "2026-03-27 21:05", historyFile: file)
+        scheduler.evaluate()
+        XCTAssertTrue(engine.targets.isEmpty, "the daily backup made minutes ago is not repeated")
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Next: tomorrow 20:00–23:00")
+    }
+
+    func testAFailedAttemptStillGatesTheRetryAfterARestart() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("state.json")
+        build(historyFile: file)
+        engine.behavior = .fail
+        devices = [device("A")]
+        settings["A"] = enabledSettings()
+        scheduler.evaluate()
+        await waitUntil { self.controller.jobs.isEmpty }
+
+        build(at: "2026-03-27 21:10", historyFile: file) // restart 10 min later
+        scheduler.evaluate()
+        XCTAssertTrue(engine.targets.isEmpty)
+        XCTAssertEqual(scheduler.statusText(for: "A"), "Waiting: retry in 20 min")
+    }
+
     func testTimerLoopEvaluates() async {
         build()
         devices = [device("A")]
@@ -273,12 +440,12 @@ final class BackupSchedulerTests: XCTestCase {
     }
 
     /// Creates the engine, controller and scheduler around a fake clock (called first in every test).
-    private func build(at start: String = "2026-03-27 21:00") {
+    private func build(at start: String = "2026-03-27 21:00", historyFile: URL? = nil) {
         let newClock = TestClock(local(start))
         clock = newClock
         engine = RecordingEngine()
         controller = BackupController(
-            engine: engine, notifier: nil, sleepBlocker: nil,
+            engine: engine, notifier: nil, sleepBlocker: nil, history: BackupHistoryStore(fileURL: historyFile),
             passcodeWaitProvider: { [unowned self] udid in self.settings[udid]?.passcodeWaitSeconds ?? 300 },
             clock: { newClock.now })
         scheduler = BackupScheduler(

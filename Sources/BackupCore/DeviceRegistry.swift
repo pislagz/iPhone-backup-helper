@@ -81,6 +81,14 @@ public struct DeviceRegistry: Sendable {
         }.sorted()
     }
 
+    /// Makes every present device due for a lockdown read right away (after wake from sleep, when the
+    /// battery level and lock state we hold are stale).
+    public mutating func requestReprobe(now: Date) {
+        for udid in entries.keys where entries[udid]?.connections.isEmpty == false {
+            entries[udid]?.nextProbe = now
+        }
+    }
+
     /// Marks a probe as in flight and returns the tag to hand back to `applyRead`.
     @discardableResult
     public mutating func markProbing(_ udid: String) -> Int {

@@ -5,6 +5,7 @@ import SwiftUI
 
 @main
 struct iPhoneBackupHelperApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -27,6 +28,26 @@ enum SettingsWindow {
     static let id = "settings"
 }
 
+/// Makes quitting safe while a backup runs: cancel it, wait for the cleanup (partial files removed,
+/// device sync lock released), and only then exit.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by `AppModel.init`.
+    @MainActor static weak var model: AppModel?
+
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model = Self.model, model.backups.isBusy else { return .terminateNow }
+        AppLog.shared.log(.info, "app", "quit requested during a backup: cancelling it first")
+        Task { @MainActor in
+            let clean = await model.backups.shutdown(timeout: 25)
+            if !clean { AppLog.shared.log(.error, "app", "backup did not stop in time; quitting anyway") }
+            AppLog.shared.flush()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
+
 /// Owns the long-lived objects of the app.
 @MainActor
 final class AppModel: ObservableObject {
@@ -44,8 +65,10 @@ final class AppModel: ObservableObject {
         let backups = BackupController(
             notifier: FilteringNotifier(
                 base: UserNotificationNotifier(), preferences: settings.notificationPreferences),
+            history: BackupHistoryStore(),
             passcodeWaitProvider: { [settings] udid in settings.settings(for: udid).passcodeWaitSeconds })
         backups.onFinished = { [monitor] in monitor.refreshBackupFolderSoon() }
+        backups.deviceLookup = { [monitor] udid in monitor.devices.first { $0.udid == udid } }
         let folder = BackupFolder()
         let scheduler = BackupScheduler(
             controller: backups,
@@ -57,13 +80,17 @@ final class AppModel: ObservableObject {
         self.monitor = monitor
         self.backups = backups
         self.scheduler = scheduler
+        AppDelegate.model = self
 
         monitor.start()
         scheduler.start()
         observeSystemEvents()
         // @Published fires before the value is stored; look at it one turn later.
-        monitor.$devices.dropFirst().sink { [weak scheduler] _ in
-            Task { @MainActor in scheduler?.evaluate() }
+        monitor.$devices.dropFirst().sink { [weak scheduler, weak backups] _ in
+            Task { @MainActor in
+                backups?.deviceListChanged()
+                scheduler?.evaluate()
+            }
         }.store(in: &cancellables)
         // Changing a device's settings takes effect right away.
         settings.$devices.dropFirst().sink { [weak scheduler] _ in
@@ -71,18 +98,20 @@ final class AppModel: ObservableObject {
         }.store(in: &cancellables)
     }
 
-    /// Wake from sleep, clock and time-zone changes.
+    /// Sleep, wake, clock and time-zone changes.
     private func observeSystemEvents() {
         let workspace = NSWorkspace.shared.notificationCenter
         observers.append(workspace.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            // The connections to the iPhones won't survive the sleep: stop cleanly now, don't wait for
+            // timeouts after wake. Whatever is still due is started again after wake.
+            Task { @MainActor [weak self] in self?.backups.suspendForSleep() }
+        })
+        observers.append(workspace.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            // Right after wake the device list is stale; check now and again once usbmuxd has caught up.
-            Task { @MainActor [weak self] in
-                self?.scheduler.evaluate()
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
-                self?.scheduler.evaluate()
-            }
+            Task { @MainActor [weak self] in await self?.handleWake() }
         })
         for name in [NSNotification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange] {
             observers.append(NotificationCenter.default.addObserver(
@@ -91,5 +120,18 @@ final class AppModel: ObservableObject {
                 Task { @MainActor [weak self] in self?.scheduler.evaluate() }
             })
         }
+    }
+
+    /// Right after wake the device list is the one from before the sleep: a device that was unplugged
+    /// meanwhile still looks reachable, and a backup started now would fail and then be delayed by the
+    /// retry interval. So: hold automatic starts, refresh the list now and again once usbmuxd has caught
+    /// up (15 s), and only then let the scheduler start backups.
+    private func handleWake() async {
+        scheduler.holdStarts(for: 60) // safety limit; released below
+        await monitor.refreshNow()
+        try? await Task.sleep(nanoseconds: 15_000_000_000)
+        await monitor.refreshNow()
+        try? await Task.sleep(nanoseconds: 2_000_000_000) // let the detail reads finish
+        scheduler.releaseStarts()
     }
 }

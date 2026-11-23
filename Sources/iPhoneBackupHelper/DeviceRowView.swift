@@ -5,6 +5,8 @@ struct DeviceRowView: View {
     let device: DeviceState
     let job: BackupJob?
     let result: BackupResult?
+    /// 1 = next in line; nil = not queued.
+    var queuePosition: Int?
     let canStart: Bool
     /// "Next: today 20:00–23:00" / "Waiting: battery 14% < 20%"; nil when automatic backups are off.
     var scheduleText: String?
@@ -35,7 +37,7 @@ struct DeviceRowView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if job == nil, let scheduleText {
+            if job == nil, queuePosition == nil, let scheduleText {
                 Label(scheduleText, systemImage: "clock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -44,6 +46,14 @@ struct DeviceRowView: View {
 
             if let job {
                 backupProgress(job)
+            } else if let queuePosition {
+                HStack {
+                    Label(queuePosition == 1 ? "Queued (next)" : "Queued (\(queuePosition))", systemImage: "hourglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel", action: onCancel)
+                }
             } else {
                 if let result, result.isProblem {
                     Text(result.text)

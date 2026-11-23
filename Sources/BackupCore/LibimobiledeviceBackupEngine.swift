@@ -8,6 +8,9 @@ public struct BackupRunnerConfig: Sendable {
     /// arrives, the device is treated as "waiting for the passcode" after this long without any message.
     public var passcodeFallbackAfter: TimeInterval = 10
     public var handler = BackupMessageHandler.Config()
+    /// A backup refuses to start with less free space than this on the backup volume (the device
+    /// asks for more itself through GetFreeDiskSpace; this is only the hard floor).
+    public var minFreeBytes: UInt64 = 200_000_000
 
     public init() {}
 }
@@ -65,6 +68,12 @@ public final class BackupRunner {
             throw BackupError.failed("Cannot write to the backup folder (\(error.localizedDescription)). Is Full Disk Access granted?")
         }
         BackupMessageHandler.sweepStaleParts(in: udidDir)
+        if let free = DiskSpace.availableBytes(
+            at: udidDir, importantUsage: config.handler.importantUsageSpace, systemFree: config.handler.systemFreeSpace),
+            free < config.minFreeBytes {
+            log(.error, "Only \(free / 1_000_000) MB free on the backup volume")
+            throw BackupError.diskFull
+        }
         let infoURL = udidDir.appendingPathComponent("Info.plist")
         let existing = InfoPlistBuilder.parse(try? Data(contentsOf: infoURL))
         let previousDate = existing?["Last Backup Date"] as? Date
@@ -157,14 +166,16 @@ public final class BackupRunner {
             }
         } catch {
             handler.abort()
+            if handler.diskFull { throw BackupError.diskFull }
             if case TransportError.connectionLost(let detail) = error {
                 log(.error, "Connection lost: \(detail)")
-                throw BackupError.failed("Lost the connection to the iPhone.")
+                throw BackupError.deviceDisconnected
             }
             throw error
         }
         handler.abort()
 
+        if handler.diskFull { throw BackupError.diskFull }
         guard let result else {
             throw BackupError.failed("The iPhone closed the connection before the backup finished.")
         }
@@ -289,6 +300,9 @@ public struct LibimobiledeviceBackupEngine: BackupEngine {
         } catch let error as BackupError {
             log(error == .cancelled ? .info : .error, "Backup of \(tag) ended: \(error.errorDescription ?? "\(error)")")
             throw error
+        } catch TransportError.connectionLost(let detail) {
+            log(.error, "Backup of \(tag) lost the connection: \(detail)")
+            throw BackupError.deviceDisconnected
         } catch {
             log(.error, "Backup of \(tag) failed: \(error)")
             throw BackupError.failed(error.localizedDescription)

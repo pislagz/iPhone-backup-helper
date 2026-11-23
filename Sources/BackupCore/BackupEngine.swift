@@ -58,6 +58,10 @@ public enum BackupError: Error, Equatable, Sendable {
     /// The user did not unlock the device in time.
     case passcodeTimeout
     case cancelled
+    /// The connection to the device dropped (cable pulled, Wi-Fi lost, device locked/asleep for good).
+    case deviceDisconnected
+    /// The Mac ran out of disk space (or has too little to start).
+    case diskFull
     case failed(String)
 }
 
@@ -68,6 +72,8 @@ extension BackupError: LocalizedError {
         case .deviceBusy: return "Device busy: Finder or another app is syncing this iPhone."
         case .passcodeTimeout: return "Waiting for the passcode timed out."
         case .cancelled: return "Backup cancelled."
+        case .deviceDisconnected: return "The iPhone was disconnected during the backup."
+        case .diskFull: return "The Mac's disk is full."
         case .failed(let reason): return reason
         }
     }

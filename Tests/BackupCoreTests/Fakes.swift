@@ -51,6 +51,8 @@ class FakeTransport: MobileBackup2Transport {
     var sentRaw = Data()
     var statuses: [SentStatus] = []
     var messages: [TransportReceive] = []
+    /// When set, reading raw data after the scripted bytes ran out is a lost connection (cable pulled).
+    var disconnectWhenRawRunsOut = false
 
     func receiveMessage() throws -> TransportReceive {
         if messages.isEmpty { throw TransportError.connectionLost("script exhausted") }
@@ -64,6 +66,7 @@ class FakeTransport: MobileBackup2Transport {
     func sendRaw(_ data: Data) throws { sentRaw.append(data) }
 
     func receiveRaw(_ count: Int) throws -> Data {
+        if rawInput.isEmpty, disconnectWhenRawRunsOut { throw TransportError.connectionLost("cable pulled") }
         let n = min(count, rawInput.count)
         let out = rawInput.prefix(n)
         rawInput.removeFirst(n)

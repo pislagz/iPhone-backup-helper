@@ -46,6 +46,8 @@ public final class BackupMessageHandler {
     /// Bytes received from the device (file contents).
     public private(set) var bytesReceived: Int64 = 0
     public private(set) var filesReceived = 0
+    /// True once a write failed because the Mac's disk (or quota) is full.
+    public private(set) var diskFull = false
     /// Latest overall progress reported by the device, 0...100.
     public private(set) var progressPercent: Double?
     private var currentPartial: PartialFile?
@@ -316,6 +318,7 @@ public final class BackupMessageHandler {
                     } catch {
                         failed = true
                         let value = errnoValue(of: error)
+                        noteWriteFailure(errno: value)
                         errorCode = DeviceErrorCode.from(errno: value)
                         errorText = describe(errno: value)
                         log(.error, "Could not write \(relative): \(describe(errno: value))")
@@ -351,6 +354,7 @@ public final class BackupMessageHandler {
                     } catch {
                         failed = true
                         let value = errnoValue(of: error)
+                        noteWriteFailure(errno: value)
                         errorCode = DeviceErrorCode.from(errno: value)
                         errorText = describe(errno: value)
                         log(.error, "Could not finalize \(relative): \(describe(errno: value))")
@@ -366,6 +370,7 @@ public final class BackupMessageHandler {
                     } catch {
                         failed = true
                         let value = errnoValue(of: error)
+                        noteWriteFailure(errno: value)
                         errorCode = DeviceErrorCode.from(errno: value)
                         errorText = describe(errno: value)
                     }
@@ -384,6 +389,10 @@ public final class BackupMessageHandler {
 
         abort()
         try transport.sendStatusResponse(code: errorCode, description: errorText, payload: [String: Any]())
+    }
+
+    private func noteWriteFailure(errno value: Int32) {
+        if value == ENOSPC || value == EDQUOT { diskFull = true }
     }
 
     private func openPartial(for destination: URL) throws -> PartialFile {

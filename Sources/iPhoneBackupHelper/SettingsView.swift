@@ -49,6 +49,7 @@ struct SettingsView: View {
                         onForget: {
                             if monitor.forget(udid: udid) {
                                 store.forget(udid)
+                                model.backups.forgetHistory(udid: udid)
                                 selection = .general
                             }
                         })

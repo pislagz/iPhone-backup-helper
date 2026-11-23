@@ -32,10 +32,15 @@ final class BackupRunnerTests: XCTestCase {
     }
 
     private func runBackup(
-        passcodeWait: TimeInterval = 300, cancel: CancellationFlag = CancellationFlag(), reports: Reports = Reports()
+        passcodeWait: TimeInterval = 300, cancel: CancellationFlag = CancellationFlag(), reports: Reports = Reports(),
+        freeBytes: UInt64? = nil
     ) throws -> BackupSummary {
         var config = BackupRunnerConfig()
         config.handler.stallTimeout = 0
+        if let freeBytes {
+            config.handler.importantUsageSpace = { _ in Int64(freeBytes) }
+            config.handler.systemFreeSpace = { _ in freeBytes }
+        }
         let runner = BackupRunner(
             session: session, target: target(passcodeWait: passcodeWait), config: config, cancel: cancel,
             now: { [clock] in clock!.now }, log: { _, _ in }, progress: { reports.add($0) })
@@ -166,8 +171,7 @@ final class BackupRunnerTests: XCTestCase {
     func testConnectionLossIsReportedAndLockReleased() throws {
         session.script = [.message(DLMessage(["DLMessageGetFreeDiskSpace"])!, raw: Data())] // then the script runs out
         XCTAssertThrowsError(try runBackup()) {
-            guard case .failed(let text)? = $0 as? BackupError else { return XCTFail("\($0)") }
-            XCTAssertTrue(text.contains("connection"), text)
+            XCTAssertEqual($0 as? BackupError, .deviceDisconnected)
         }
         XCTAssertEqual(session.calls.last, "unlock")
     }
@@ -193,6 +197,44 @@ final class BackupRunnerTests: XCTestCase {
         flag.cancel()
         XCTAssertThrowsError(try runBackup(cancel: flag)) { XCTAssertEqual($0 as? BackupError, .cancelled) }
         XCTAssertTrue(session.calls.isEmpty)
+    }
+
+    // MARK: - Robustness (M4)
+
+    private func parts() -> [URL] {
+        let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: nil)
+        return (enumerator?.allObjects as? [URL] ?? []).filter { $0.lastPathComponent.hasSuffix(BackupMessageHandler.partSuffix) }
+    }
+
+    func testDisconnectInTheMiddleOfAFileLeavesNoPartialFileAndKeepsThePreviousBackup() throws {
+        let previous = Date(timeIntervalSince1970: 1_700_000_000)
+        try fm.createDirectory(at: udidDir, withIntermediateDirectories: true)
+        try plistData(["Last Backup Date": previous] as [String: Any]).write(to: udidDir.appendingPathComponent("Info.plist"))
+        let oldManifest = Data("old manifest".utf8)
+        try oldManifest.write(to: udidDir.appendingPathComponent("Manifest.db"))
+
+        // One data frame of a new file arrives, then the cable is pulled.
+        let raw = Stream.name("dev") + Stream.name("\(udid)/ab/abcdef") + be32(5 + 1) + Data([0x0c]) + Data("12345".utf8)
+        session.disconnectWhenRawRunsOut = true
+        session.script = [.message(DLMessage(["DLMessageUploadFiles", 0, 10.0, 100])!, raw: raw)]
+
+        XCTAssertThrowsError(try runBackup()) { XCTAssertEqual($0 as? BackupError, .deviceDisconnected) }
+        XCTAssertTrue(parts().isEmpty, "no half-written file is left behind")
+        XCTAssertFalse(fm.fileExists(atPath: udidDir.appendingPathComponent("ab/abcdef").path))
+        XCTAssertEqual(try Data(contentsOf: udidDir.appendingPathComponent("Manifest.db")), oldManifest)
+        XCTAssertEqual(try readInfo()["Last Backup Date"] as? Date, previous, "a dropped backup is not marked as done")
+        XCTAssertEqual(session.calls.last, "unlock")
+    }
+
+    func testTooLittleFreeSpaceStopsBeforeRequestingTheBackup() throws {
+        XCTAssertThrowsError(try runBackup(freeBytes: 10_000_000)) { XCTAssertEqual($0 as? BackupError, .diskFull) }
+        XCTAssertFalse(session.calls.contains { $0.hasPrefix("request") })
+        XCTAssertEqual(session.calls.last, "unlock")
+    }
+
+    func testPlentyOfFreeSpaceDoesNotBlock() throws {
+        session.script = try successScript()
+        XCTAssertNoThrow(try runBackup(freeBytes: 50_000_000_000))
     }
 
     // MARK: - Passcode
