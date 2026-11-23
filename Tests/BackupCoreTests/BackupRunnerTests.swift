@@ -31,7 +31,7 @@ final class BackupRunnerTests: XCTestCase {
         var all: [BackupProgress] { lock.lock(); defer { lock.unlock() }; return items }
     }
 
-    private func run(
+    private func runBackup(
         passcodeWait: TimeInterval = 300, cancel: CancellationFlag = CancellationFlag(), reports: Reports = Reports()
     ) throws -> BackupSummary {
         var config = BackupRunnerConfig()
@@ -78,7 +78,7 @@ final class BackupRunnerTests: XCTestCase {
             session.deviceFiles["/iTunes_Control/iTunes/iTunesPrefs"] = Data([1, 2, 3])
             let reports = Reports()
 
-            let summary = try run(reports: reports)
+            let summary = try runBackup(reports: reports)
 
             XCTAssertEqual(session.calls, ["lock", "request:\(udid)", "unlock"], "encrypted=\(encrypted)")
             XCTAssertGreaterThan(summary.bytesWritten, 2)
@@ -113,7 +113,7 @@ final class BackupRunnerTests: XCTestCase {
         var infoAtRequest: [String: Any]?
         session.onRequestBackup = { [self] in infoAtRequest = try? readInfo() }
         session.script = try successScript()
-        _ = try run()
+        _ = try runBackup()
 
         let before = try XCTUnwrap(infoAtRequest)
         XCTAssertEqual(before["Last Backup Date"] as? Date, previous, "a running backup must not look like a finished one")
@@ -132,7 +132,7 @@ final class BackupRunnerTests: XCTestCase {
         try oldManifest.write(to: udidDir.appendingPathComponent("Manifest.db"))
 
         session.script = [.message(DLMessage(["DLMessageGetFreeDiskSpace"])!, raw: Data()), finish(code: 211)]
-        XCTAssertThrowsError(try run()) {
+        XCTAssertThrowsError(try runBackup()) {
             guard case .failed(let text)? = $0 as? BackupError else { return XCTFail("\($0)") }
             XCTAssertTrue(text.contains("211") && text.contains("boom"), text)
         }
@@ -143,14 +143,14 @@ final class BackupRunnerTests: XCTestCase {
 
     func testFirstFailedBackupHasNoLastBackupDate() throws {
         session.script = [finish(code: 1)]
-        XCTAssertThrowsError(try run())
+        XCTAssertThrowsError(try runBackup())
         XCTAssertNil(try readInfo()["Last Backup Date"])
         XCTAssertNil(BackupFolder(root: root).lastBackupDate(udid: udid))
     }
 
     func testSuccessCodeWithoutFinishedStatusIsAFailure() throws {
         session.script = try successScript(statusState: "uploading")
-        XCTAssertThrowsError(try run()) {
+        XCTAssertThrowsError(try runBackup()) {
             guard case .failed? = $0 as? BackupError else { return XCTFail("\($0)") }
         }
         XCTAssertNil(try readInfo()["Last Backup Date"])
@@ -158,14 +158,14 @@ final class BackupRunnerTests: XCTestCase {
 
     func testDeviceBusyStopsBeforeTouchingTheBackupFolder() throws {
         session.busy = true
-        XCTAssertThrowsError(try run()) { XCTAssertEqual($0 as? BackupError, .deviceBusy) }
+        XCTAssertThrowsError(try runBackup()) { XCTAssertEqual($0 as? BackupError, .deviceBusy) }
         XCTAssertFalse(fm.fileExists(atPath: udidDir.path))
         XCTAssertFalse(session.calls.contains { $0.hasPrefix("request") })
     }
 
     func testConnectionLossIsReportedAndLockReleased() throws {
         session.script = [.message(DLMessage(["DLMessageGetFreeDiskSpace"])!, raw: Data())] // then the script runs out
-        XCTAssertThrowsError(try run()) {
+        XCTAssertThrowsError(try runBackup()) {
             guard case .failed(let text)? = $0 as? BackupError else { return XCTFail("\($0)") }
             XCTAssertTrue(text.contains("connection"), text)
         }
@@ -178,20 +178,20 @@ final class BackupRunnerTests: XCTestCase {
             .run { flag.cancel() },
             .timeout(advance: 1),
         ]
-        XCTAssertThrowsError(try run(cancel: flag)) { XCTAssertEqual($0 as? BackupError, .cancelled) }
+        XCTAssertThrowsError(try runBackup(cancel: flag)) { XCTAssertEqual($0 as? BackupError, .cancelled) }
         XCTAssertEqual(session.calls.last, "unlock")
         XCTAssertTrue(session.statuses.isEmpty)
     }
 
     func testCancelRequestedOnTheDevice() throws {
         session.script = [.event(.cancelRequestedOnDevice), .timeout(advance: 1)]
-        XCTAssertThrowsError(try run()) { XCTAssertEqual($0 as? BackupError, .cancelled) }
+        XCTAssertThrowsError(try runBackup()) { XCTAssertEqual($0 as? BackupError, .cancelled) }
     }
 
     func testCancelBeforeStartDoesNothing() throws {
         let flag = CancellationFlag()
         flag.cancel()
-        XCTAssertThrowsError(try run(cancel: flag)) { XCTAssertEqual($0 as? BackupError, .cancelled) }
+        XCTAssertThrowsError(try runBackup(cancel: flag)) { XCTAssertEqual($0 as? BackupError, .cancelled) }
         XCTAssertTrue(session.calls.isEmpty)
     }
 
@@ -202,7 +202,7 @@ final class BackupRunnerTests: XCTestCase {
         session.script = [.timeout(advance: 30), .timeout(advance: 30), .event(.passcodePromptDismissed)]
         session.script += try successScript()
         let reports = Reports()
-        _ = try run(passcodeWait: 300, reports: reports)
+        _ = try runBackup(passcodeWait: 300, reports: reports)
         let phases = reports.all.map(\.phase)
         let waiting = try XCTUnwrap(phases.firstIndex(of: .waitingForPasscode))
         XCTAssertTrue(phases[waiting...].contains(.transferring))
@@ -213,7 +213,7 @@ final class BackupRunnerTests: XCTestCase {
         session.onRequestBackup = { [session] in session!.script.insert(.event(.passcodePromptShown), at: 0) }
         session.script = Array(repeating: .timeout(advance: 60), count: 20)
         let reports = Reports()
-        XCTAssertThrowsError(try run(passcodeWait: 300, reports: reports)) {
+        XCTAssertThrowsError(try runBackup(passcodeWait: 300, reports: reports)) {
             XCTAssertEqual($0 as? BackupError, .passcodeTimeout)
         }
         XCTAssertTrue(reports.all.contains { $0.phase == .waitingForPasscode })
@@ -227,7 +227,7 @@ final class BackupRunnerTests: XCTestCase {
         session.productVersion = "17.5"
         session.script = Array(repeating: .timeout(advance: 5), count: 100)
         let reports = Reports()
-        XCTAssertThrowsError(try run(passcodeWait: 60, reports: reports)) {
+        XCTAssertThrowsError(try runBackup(passcodeWait: 60, reports: reports)) {
             XCTAssertEqual($0 as? BackupError, .passcodeTimeout)
         }
         XCTAssertTrue(reports.all.contains { $0.phase == .waitingForPasscode })
@@ -237,7 +237,7 @@ final class BackupRunnerTests: XCTestCase {
         session.productVersion = "15.0"
         session.script = Array(repeating: .timeout(advance: 5), count: 10) + [finish(code: 1)]
         let reports = Reports()
-        XCTAssertThrowsError(try run(passcodeWait: 1, reports: reports)) {
+        XCTAssertThrowsError(try runBackup(passcodeWait: 1, reports: reports)) {
             guard case .failed? = $0 as? BackupError else { return XCTFail("\($0)") }
         }
         XCTAssertFalse(reports.all.contains { $0.phase == .waitingForPasscode })
