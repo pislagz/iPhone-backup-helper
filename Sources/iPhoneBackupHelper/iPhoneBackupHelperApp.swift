@@ -7,7 +7,7 @@ struct iPhoneBackupHelperApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContentView(monitor: model.monitor)
+            MenuContentView(monitor: model.monitor, backups: model.backups)
         } label: {
             Image(systemName: "iphone.gen3")
         }
@@ -19,9 +19,13 @@ struct iPhoneBackupHelperApp: App {
 @MainActor
 final class AppModel: ObservableObject {
     let monitor: DeviceMonitor
+    let backups: BackupController
 
     init() {
+        AppLog.shared.log(.info, "app", "iPhone Backup Helper started")
         monitor = DeviceMonitor()
+        backups = BackupController(notifier: UserNotificationNotifier())
+        backups.onFinished = { [monitor] in monitor.refreshBackupFolderSoon() }
         monitor.start()
     }
 }

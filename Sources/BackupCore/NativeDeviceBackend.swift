@@ -115,7 +115,7 @@ public final class NativeDeviceBackend: DeviceBackend {
     }
 
     /// Reads a lockdown domain (nil = global) as a Foundation dictionary, via the XML plist form.
-    private static func dictionary(client: lockdownd_client_t, domain: String?) -> [String: Any]? {
+    static func dictionary(client: lockdownd_client_t, domain: String?) -> [String: Any]? {
         var node: plist_t? = nil
         guard lockdownd_get_value(client, domain, nil, &node).rawValue == 0, let node else { return nil }
         defer { plist_free(node) }

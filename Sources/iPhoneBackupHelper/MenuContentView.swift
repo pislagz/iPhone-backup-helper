@@ -4,6 +4,7 @@ import SwiftUI
 
 struct MenuContentView: View {
     @ObservedObject var monitor: DeviceMonitor
+    @ObservedObject var backups: BackupController
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -27,13 +28,20 @@ struct MenuContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(monitor.devices) { device in
-                    DeviceRowView(device: device)
+                    DeviceRowView(
+                        device: device,
+                        job: backups.jobs[device.udid],
+                        result: backups.results[device.udid],
+                        canStart: backups.canStart(device),
+                        onBackUp: { backups.start(device) },
+                        onCancel: { backups.cancel(udid: device.udid) })
                     if device.id != monitor.devices.last?.id { Divider() }
                 }
             }
 
             Divider()
             HStack {
+                Button("Show Log") { LogViewer.reveal() }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
@@ -70,6 +78,20 @@ private struct FullDiskAccessBanner: View {
             Text("After enabling it, quit and reopen this app.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+enum LogViewer {
+    /// Reveals the rolling log file in Finder (a local file, nothing is uploaded).
+    static func reveal() {
+        let log = AppLog.shared
+        log.flush()
+        if FileManager.default.fileExists(atPath: log.logFileURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([log.logFileURL])
+        } else {
+            try? FileManager.default.createDirectory(at: log.directory, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(log.directory)
         }
     }
 }

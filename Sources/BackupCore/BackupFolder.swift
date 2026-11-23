@@ -31,22 +31,31 @@ public struct BackupFolder: Sendable {
 }
 
 public enum BackupMetadata {
-    /// `Info.plist` → "Last Backup Date"; `Status.plist` → "Date" when `SnapshotState` is "finished".
-    /// The newest of the two wins.
+    /// Date of the last *successful* backup.
+    ///
+    /// `Status.plist` is the source of truth: the device writes `SnapshotState` = "finished" and
+    /// "Date" only when a backup completed. `Info.plist` ("Last Backup Date") is written by
+    /// Finder/idevicebackup2 at the *start* of a backup, so it must not count as success.
+    /// - Status.plist readable and finished (with a date) → that date.
+    /// - Status.plist readable but not finished (failed/in-progress backup) → nil.
+    /// - Status.plist missing/unreadable (or finished without a date) → Info.plist's date, if any.
     public static func lastBackupDate(infoPlist: Data?, statusPlist: Data?) -> Date? {
-        var candidates: [Date] = []
-        if let info = dictionary(infoPlist), let date = info["Last Backup Date"] as? Date {
-            candidates.append(date)
+        if let status = dictionary(statusPlist) {
+            if status["SnapshotState"] as? String == "finished" {
+                if let date = status["Date"] as? Date { return date }
+            } else {
+                return nil
+            }
         }
-        if let status = dictionary(statusPlist),
-           status["SnapshotState"] as? String == "finished",
-           let date = status["Date"] as? Date {
-            candidates.append(date)
-        }
-        return candidates.max()
+        return dictionary(infoPlist)?["Last Backup Date"] as? Date
     }
 
-    private static func dictionary(_ data: Data?) -> [String: Any]? {
+    /// True when Status.plist says the snapshot is complete.
+    public static func isFinished(statusPlist: Data?) -> Bool {
+        dictionary(statusPlist)?["SnapshotState"] as? String == "finished"
+    }
+
+    static func dictionary(_ data: Data?) -> [String: Any]? {
         guard let data else { return nil }
         return (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any]
     }

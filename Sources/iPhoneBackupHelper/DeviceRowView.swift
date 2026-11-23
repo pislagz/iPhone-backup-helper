@@ -3,6 +3,11 @@ import SwiftUI
 
 struct DeviceRowView: View {
     let device: DeviceState
+    let job: BackupJob?
+    let result: BackupResult?
+    let canStart: Bool
+    let onBackUp: () -> Void
+    let onCancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -28,14 +33,50 @@ struct DeviceRowView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack {
-                Spacer()
-                Button("Back up now") {}
-                    .disabled(true)
-                    .help("Manual backups arrive in the next milestone.")
+            if let job {
+                backupProgress(job)
+            } else {
+                if let result, result.isProblem {
+                    Text(result.text)
+                        .font(.caption)
+                        .foregroundStyle(Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Spacer()
+                    Button("Back up now", action: onBackUp)
+                        .disabled(!canStart)
+                        .help(canStart ? "Back up this device now" : "The device must be connected and trusted.")
+                }
             }
         }
         .opacity(device.isReachable ? 1 : 0.6)
+    }
+
+    @ViewBuilder
+    private func backupProgress(_ job: BackupJob) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let fraction = job.fraction {
+                ProgressView(value: fraction)
+            } else {
+                ProgressView().progressViewStyle(.linear)
+            }
+            HStack {
+                Text(progressText(job))
+                    .font(.caption)
+                    .foregroundStyle(job.phase == .waitingForPasscode ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Cancel", action: onCancel)
+            }
+        }
+    }
+
+    private func progressText(_ job: BackupJob) -> String {
+        if let fraction = job.fraction, job.phase == .transferring {
+            return "\(job.message) \(Int((fraction * 100).rounded()))%"
+        }
+        return job.message
     }
 
     private var subtitle: String {

@@ -59,6 +59,31 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertNil(registry.states().first?.battery)
     }
 
+    func testStaleProbeFromBeforeQuickReattachIsDropped() {
+        var registry = DeviceRegistry()
+        let usb = [ConnectedDevice(udid: udid, connection: .usb)]
+        registry.applyConnections(usb, now: t0)
+        let stale = registry.markProbing(udid)
+
+        // Detach and re-attach before the first probe returns.
+        registry.applyConnections([], now: t0.addingTimeInterval(1))
+        registry.applyConnections(usb, now: t0.addingTimeInterval(2))
+        XCTAssertEqual(registry.udidsDueForProbe(now: t0.addingTimeInterval(2)), [udid], "reattach probes again")
+        let fresh = registry.markProbing(udid)
+        XCTAssertNotEqual(stale, fresh)
+
+        // The stale result arrives first: ignored, and it must not clear the newer probe's in-flight flag.
+        XCTAssertNil(registry.applyRead(
+            udid: udid, result: .success(details(battery: 11)), now: t0.addingTimeInterval(3), generation: stale))
+        XCTAssertNil(registry.states().first?.battery)
+        XCTAssertTrue(registry.udidsDueForProbe(now: t0.addingTimeInterval(3)).isEmpty, "second probe still in flight")
+
+        // The current probe's result is applied.
+        XCTAssertNotNil(registry.applyRead(
+            udid: udid, result: .success(details(battery: 77)), now: t0.addingTimeInterval(4), generation: fresh))
+        XCTAssertEqual(registry.states().first?.battery?.level, 77)
+    }
+
     func testNeedsTrustBacksOffAndRecovers() {
         var registry = DeviceRegistry()
         registry.applyConnections([ConnectedDevice(udid: udid, connection: .usb)], now: t0)

@@ -21,10 +21,37 @@ final class BackupFolderTests: XCTestCase {
         XCTAssertNil(BackupMetadata.lastBackupDate(infoPlist: nil, statusPlist: running))
     }
 
-    func testNewestWins() throws {
+    func testStatusWinsOverNewerInfoPlist() throws {
+        // Finder/idevicebackup2 write Info.plist at the start of the *next* backup.
+        let info = try plist(["Last Backup Date": newer])
+        let status = try plist(["Date": older, "SnapshotState": "finished"])
+        XCTAssertEqual(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: status), older)
+    }
+
+    func testUnfinishedStatusIsNotASuccessEvenWithInfoPlist() throws {
+        let info = try plist(["Last Backup Date": newer])
+        let status = try plist(["Date": newer, "SnapshotState": "uploading"])
+        XCTAssertNil(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: status))
+        let fresh = try plist(["SnapshotState": "new"])
+        XCTAssertNil(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: fresh))
+    }
+
+    func testInfoPlistFallbackWhenStatusMissingOrUnreadable() throws {
         let info = try plist(["Last Backup Date": older])
-        let status = try plist(["Date": newer, "SnapshotState": "finished"])
-        XCTAssertEqual(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: status), newer)
+        XCTAssertEqual(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: nil), older)
+        XCTAssertEqual(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: Data("junk".utf8)), older)
+    }
+
+    func testFinishedStatusWithoutDateFallsBackToInfoPlist() throws {
+        let info = try plist(["Last Backup Date": older])
+        let status = try plist(["SnapshotState": "finished"])
+        XCTAssertEqual(BackupMetadata.lastBackupDate(infoPlist: info, statusPlist: status), older)
+    }
+
+    func testIsFinished() throws {
+        XCTAssertTrue(BackupMetadata.isFinished(statusPlist: try plist(["SnapshotState": "finished"])))
+        XCTAssertFalse(BackupMetadata.isFinished(statusPlist: try plist(["SnapshotState": "new"])))
+        XCTAssertFalse(BackupMetadata.isFinished(statusPlist: nil))
     }
 
     func testGarbageAndMissing() {

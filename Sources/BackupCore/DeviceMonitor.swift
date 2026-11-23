@@ -81,11 +81,11 @@ public final class DeviceMonitor: ObservableObject {
         }
 
         for udid in registry.udidsDueForProbe(now: now) {
-            registry.markProbing(udid)
+            let generation = registry.markProbing(udid)
             let backend = self.backend
             Task { [weak self] in
                 let result = await backend.readDetails(udid: udid)
-                self?.finishProbe(udid: udid, result: result)
+                self?.finishProbe(udid: udid, result: result, generation: generation)
             }
         }
 
@@ -98,8 +98,8 @@ public final class DeviceMonitor: ObservableObject {
         publish()
     }
 
-    private func finishProbe(udid: String, result: DeviceReadResult) {
-        let changed = registry.applyRead(udid: udid, result: result, now: clock())
+    private func finishProbe(udid: String, result: DeviceReadResult, generation: Int) {
+        let changed = registry.applyRead(udid: udid, result: result, now: clock(), generation: generation)
         if changed != nil { save() }
         publish()
     }

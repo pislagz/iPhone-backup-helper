@@ -46,7 +46,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BackupCoreTests",
-            dependencies: ["BackupCore"],
+            dependencies: ["BackupCore", "CLibimobiledevice"],
             path: "Tests/BackupCoreTests",
             swiftSettings: vendorHeaders
         ),

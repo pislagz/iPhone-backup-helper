@@ -20,6 +20,8 @@ public struct DeviceRegistry: Sendable {
         var lastSeen: Date?
         var nextProbe: Date?
         var probing = false
+        /// Bumped on every attach and detach; a probe result is only applied when its tag still matches.
+        var generation = 0
     }
 
     var entries: [String: Entry] = [:]
@@ -42,7 +44,11 @@ public struct DeviceRegistry: Sendable {
 
         for (udid, conns) in byUDID {
             var entry = entries[udid] ?? Entry()
-            if entry.connections.isEmpty { entry.nextProbe = now } // (re)attached
+            if entry.connections.isEmpty { // (re)attached
+                entry.nextProbe = now
+                entry.generation += 1
+                entry.probing = false
+            }
             entry.connections = conns
             entry.lastSeen = now
             entries[udid] = entry
@@ -53,6 +59,7 @@ public struct DeviceRegistry: Sendable {
             entries[udid]?.issue = nil
             entries[udid]?.nextProbe = nil
             entries[udid]?.probing = false
+            entries[udid]?.generation += 1
         }
         return detached
     }
@@ -74,14 +81,22 @@ public struct DeviceRegistry: Sendable {
         }.sorted()
     }
 
-    public mutating func markProbing(_ udid: String) {
+    /// Marks a probe as in flight and returns the tag to hand back to `applyRead`.
+    @discardableResult
+    public mutating func markProbing(_ udid: String) -> Int {
         entries[udid]?.probing = true
+        return entries[udid]?.generation ?? 0
     }
 
     /// Apply a lockdown read. Returns the `KnownDevice` to persist when it changed.
+    /// A result tagged with an older generation (the device detached and/or re-attached while the
+    /// probe was in flight) is dropped and does not touch the state of the newer probe.
     @discardableResult
-    public mutating func applyRead(udid: String, result: DeviceReadResult, now: Date) -> KnownDevice? {
+    public mutating func applyRead(
+        udid: String, result: DeviceReadResult, now: Date, generation: Int? = nil
+    ) -> KnownDevice? {
         guard var entry = entries[udid] else { return nil }
+        if let generation, generation != entry.generation { return nil }
         entry.probing = false
         // A detach while the probe was in flight: ignore stale results.
         guard !entry.connections.isEmpty else { entries[udid] = entry; return nil }
