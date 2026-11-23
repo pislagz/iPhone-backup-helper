@@ -3,6 +3,8 @@ import PackageDescription
 
 // The C libraries are built by scripts/build-deps.sh into ./vendor (universal dylibs).
 let vendor = Context.packageDirectory + "/vendor"
+// The clang importer (Swift side) needs the header path too, not only the C target's own compile.
+let vendorHeaders: [SwiftSetting] = [.unsafeFlags(["-Xcc", "-I", "-Xcc", vendor + "/include"])]
 
 let package = Package(
     name: "iPhoneBackupHelper",
@@ -30,12 +32,14 @@ let package = Package(
         .target(
             name: "BackupCore",
             dependencies: ["CLibimobiledevice"],
-            path: "Sources/BackupCore"
+            path: "Sources/BackupCore",
+            swiftSettings: vendorHeaders
         ),
         .executableTarget(
             name: "iPhoneBackupHelper",
             dependencies: ["BackupCore"],
             path: "Sources/iPhoneBackupHelper",
+            swiftSettings: vendorHeaders,
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
             ]
@@ -43,7 +47,8 @@ let package = Package(
         .testTarget(
             name: "BackupCoreTests",
             dependencies: ["BackupCore"],
-            path: "Tests/BackupCoreTests"
+            path: "Tests/BackupCoreTests",
+            swiftSettings: vendorHeaders
         ),
     ]
 )
