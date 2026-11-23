@@ -21,7 +21,7 @@ if [[ ! -d "$APP" ]]; then bad "app bundle not found: $APP"; fi
 if [[ -d "$APP" ]]; then
   while IFS= read -r -d '' f; do
     file "$f" | grep -q 'Mach-O' || continue
-    deps="$(otool -L "$f" | tail -n +2 | awk '{print $1}')"
+    deps="$(otool -L "$f" | grep -E '^[[:space:]]' | awk '{print $1}')"
     if echo "$deps" | grep -Eqi "$FORBIDDEN_LIBS"; then
       bad "$f links a forbidden library:"; echo "$deps" | grep -Ei "$FORBIDDEN_LIBS" >&2
     fi

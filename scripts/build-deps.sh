@@ -132,7 +132,7 @@ for f in "$VENDOR/lib/"*.dylib; do
   [[ -L "$f" ]] && continue
   while read -r dep; do
     case "$dep" in "$BUILD"/*) install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$f" ;; esac
-  done < <(otool -L "$f" | tail -n +2 | awk '{print $1}')
+  done < <(otool -L "$f" | grep -E '^[[:space:]]' | awk '{print $1}')
 done
 rsync -a --exclude openssl "$BUILD/$first/prefix/include/" "$VENDOR/include/"
 
@@ -140,10 +140,10 @@ rsync -a --exclude openssl "$BUILD/$first/prefix/include/" "$VENDOR/include/"
 for f in "$VENDOR/lib/"*.dylib; do
   [[ -L "$f" ]] && continue
   lipo -archs "$f" | grep -q arm64 && lipo -archs "$f" | grep -q x86_64 || { echo "not universal: $f" >&2; exit 1; }
-  if otool -L "$f" | tail -n +2 | awk '{print $1}' | grep -Ev '^(@rpath/|/usr/lib/|/System/Library/)'; then
+  if otool -L "$f" | grep -E '^[[:space:]]' | awk '{print $1}' | grep -Ev '^(@rpath/|/usr/lib/|/System/Library/)'; then
     echo "unexpected dependency in $f" >&2; exit 1
   fi
-  if otool -L "$f" | grep -Eqi 'curl|nghttp|libssl|libcrypto|Sparkle'; then
+  if otool -L "$f" | grep -E '^[[:space:]]' | grep -Eqi 'curl|nghttp|libssl|libcrypto|Sparkle'; then
     echo "forbidden dependency in $f" >&2; exit 1
   fi
 done
