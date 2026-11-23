@@ -107,7 +107,8 @@ final class AppModel: ObservableObject {
         ) { [weak self] _ in
             // The connections to the iPhones won't survive the sleep: stop cleanly now, don't wait for
             // timeouts after wake. Whatever is still due is started again after wake.
-            Task { @MainActor [weak self] in self?.backups.suspendForSleep() }
+            // Already on the main queue: issue the abort now, before the system goes to sleep.
+            MainActor.assumeIsolated { self?.backups.suspendForSleep() }
         })
         observers.append(workspace.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main

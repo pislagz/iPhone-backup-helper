@@ -187,15 +187,26 @@ public final class BackupController: ObservableObject {
     public func cancel(udid: String) {
         if queuedDevices[udid] != nil {
             dequeue(udid)
+            recordUserCancelOfQueued(udid)
             return
         }
         abort(udid, reason: .user)
     }
 
     public func cancelAll() {
+        for udid in queue { recordUserCancelOfQueued(udid) }
         queue.removeAll()
         queuedDevices.removeAll()
         for udid in Array(jobs.keys) { abort(udid, reason: .user) }
+    }
+
+    /// A user's cancel of a queued backup counts like a cancel of a running one: the menu says
+    /// "Backup cancelled" and the scheduler waits for the retry interval instead of queueing it again.
+    /// (Queue drops for sleep or quit are not user decisions and don't go through here.)
+    private func recordUserCancelOfQueued(_ udid: String) {
+        let now = clock()
+        results[udid] = BackupResult(kind: .cancelled, finishedAt: now, duration: 0)
+        history.recordFailure(udid, at: now)
     }
 
     /// Call when the device list changed. A running backup whose device stays gone for

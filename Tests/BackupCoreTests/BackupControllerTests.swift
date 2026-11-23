@@ -273,6 +273,25 @@ final class BackupQueueAndAbortTests: XCTestCase {
         XCTAssertEqual(engine.started, ["A"], "the cancelled queue entry never started")
     }
 
+    func testUserCancelOfAQueuedDeviceIsRecordedButSleepAndQuitDropsAreNot() async {
+        let engine = CleanupEngine()
+        let controller = BackupController(engine: engine, notifier: nil, sleepBlocker: nil)
+        controller.start(device("A")); controller.start(device("B")); controller.start(device("C"))
+        controller.cancel(udid: "B")
+        XCTAssertEqual(controller.results["B"]?.kind, .cancelled)
+        XCTAssertNotNil(controller.lastFailedAttempt(for: "B"))
+
+        controller.suspendForSleep() // drops C
+        XCTAssertNil(controller.lastFailedAttempt(for: "C"), "a sleep drop must restart after wake")
+        await waitUntil { controller.jobs.isEmpty }
+
+        controller.start(device("D")); controller.start(device("E"))
+        controller.cancelAll()
+        XCTAssertEqual(controller.results["E"]?.kind, .cancelled)
+        XCTAssertNotNil(controller.lastFailedAttempt(for: "E"))
+        await waitUntil { controller.jobs.isEmpty }
+    }
+
     func testQueuedDeviceThatLeftIsSkippedWhenItsTurnComes() async {
         var present: Set<String> = ["A", "B", "C"]
         let seen = Concurrency()

@@ -421,6 +421,29 @@ final class BackupSchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.statusText(for: "A"), "Waiting: retry in 20 min")
     }
 
+    func testCancellingAQueuedAutomaticBackupIsNotUndoneByTheScheduler() async {
+        build()
+        engine.behavior = .hold
+        devices = [device("A"), device("B")]
+        settings["A"] = enabledSettings()
+        settings["B"] = enabledSettings()
+        scheduler.evaluate()
+        await waitUntil { !self.engine.targets.isEmpty }
+        XCTAssertTrue(controller.isQueued("B"))
+
+        controller.cancel(udid: "B") // the user cancels the queued one
+        XCTAssertEqual(controller.results["B"]?.kind, .cancelled)
+        scheduler.evaluate()
+        XCTAssertFalse(controller.isQueued("B"), "not queued again right away")
+        XCTAssertEqual(scheduler.statusText(for: "B"), "Waiting: retry in 30 min")
+
+        clock.advance(31 * 60) // retry interval over, still inside the window
+        scheduler.evaluate()
+        XCTAssertTrue(controller.isQueued("B"), "automatic backups resume after the retry interval")
+        await engine.gate.release()
+        await waitUntil { self.controller.jobs.isEmpty && self.controller.queue.isEmpty }
+    }
+
     func testTimerLoopEvaluates() async {
         build()
         devices = [device("A")]
