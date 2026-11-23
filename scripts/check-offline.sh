@@ -14,7 +14,10 @@ bad() { echo "OFFLINE CHECK FAILED: $*" >&2; fail=1; }
 # Frameworks/dylibs that must never be linked.
 FORBIDDEN_LIBS='libcurl|CFNetwork|Network\.framework|NetworkExtension|Sparkle|libnghttp|libssh|WebKit|Crashlytics|Firebase|Sentry|Mixpanel|Amplitude|Telemetry'
 # Undefined symbols that indicate HTTP / URL loading / sockets to arbitrary hosts.
-FORBIDDEN_SYMS='NSURLSession|NSURLConnection|NSURLRequest|CFHTTP|CFURLConnection|CFReadStreamCreateForHTTPRequest|_curl_|nw_connection_create|nw_endpoint_create_host|_gethostbyname|_getaddrinfo\b'
+FORBIDDEN_SYMS='NSURLSession|NSURLConnection|NSURLRequest|CFHTTP|CFURLConnection|CFReadStreamCreateForHTTPRequest|_curl_|nw_connection_create|nw_endpoint_create_host'
+# Note: libc name resolution (getaddrinfo/gethostbyname) is imported by libimobiledevice(-glue)'s generic
+# socket helpers and can't be banned at the symbol level; the app only hands them usbmuxd/UDIDs. The
+# runtime firewall test (docs/OFFLINE.md, M4) is the proof there.
 
 if [[ ! -d "$APP" ]]; then bad "app bundle not found: $APP"; fi
 
