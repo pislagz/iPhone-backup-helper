@@ -124,6 +124,14 @@ public struct DeviceRegistry: Sendable {
         return toPersist
     }
 
+    /// Removes a device that is not connected. Returns false (and keeps it) while it is present.
+    @discardableResult
+    public mutating func forget(_ udid: String) -> Bool {
+        guard let entry = entries[udid], entry.connections.isEmpty else { return false }
+        entries[udid] = nil
+        return true
+    }
+
     public mutating func applyLastBackup(udid: String, date: Date?) {
         entries[udid]?.lastBackup = date
     }

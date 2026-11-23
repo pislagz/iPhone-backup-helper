@@ -59,6 +59,15 @@ public final class DeviceMonitor: ObservableObject {
         loop = nil
     }
 
+    /// Removes a device that is not connected from the known list (its backups are not touched).
+    @discardableResult
+    public func forget(udid: String) -> Bool {
+        guard registry.forget(udid) else { return false }
+        save()
+        publish()
+        return true
+    }
+
     /// Re-read backup dates and Full Disk Access status on the next tick.
     public func refreshBackupFolderSoon() {
         nextFolderCheck = .distantPast

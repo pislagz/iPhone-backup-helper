@@ -6,6 +6,8 @@ struct DeviceRowView: View {
     let job: BackupJob?
     let result: BackupResult?
     let canStart: Bool
+    /// "Next: today 20:00–23:00" / "Waiting: battery 14% < 20%"; nil when automatic backups are off.
+    var scheduleText: String?
     let onBackUp: () -> Void
     let onCancel: () -> Void
 
@@ -30,6 +32,13 @@ struct DeviceRowView: View {
                 Text(statusLine(now: context.date))
                     .font(.caption)
                     .foregroundStyle(statusIsProblem ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if job == nil, let scheduleText {
+                Label(scheduleText, systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

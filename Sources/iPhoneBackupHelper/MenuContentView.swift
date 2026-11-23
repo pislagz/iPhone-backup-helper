@@ -5,6 +5,8 @@ import SwiftUI
 struct MenuContentView: View {
     @ObservedObject var monitor: DeviceMonitor
     @ObservedObject var backups: BackupController
+    @ObservedObject var scheduler: BackupScheduler
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -33,6 +35,7 @@ struct MenuContentView: View {
                         job: backups.jobs[device.udid],
                         result: backups.results[device.udid],
                         canStart: backups.canStart(device),
+                        scheduleText: scheduler.statusText(for: device.udid),
                         onBackUp: { backups.start(device) },
                         onCancel: { backups.cancel(udid: device.udid) })
                     if device.id != monitor.devices.last?.id { Divider() }
@@ -41,6 +44,10 @@ struct MenuContentView: View {
 
             Divider()
             HStack {
+                Button("Settings…") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: SettingsWindow.id)
+                }
                 Button("Show Log") { LogViewer.reveal() }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }

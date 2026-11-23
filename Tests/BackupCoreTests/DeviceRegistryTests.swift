@@ -35,6 +35,16 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertEqual(state?.preferredConnection, .usb)
     }
 
+    func testForgetOnlyRemovesDevicesThatAreNotConnected() {
+        var registry = DeviceRegistry()
+        registry.applyConnections([ConnectedDevice(udid: udid, connection: .usb)], now: t0)
+        XCTAssertFalse(registry.forget(udid), "a connected device would reappear immediately")
+        registry.applyConnections([], now: t0.addingTimeInterval(5))
+        XCTAssertTrue(registry.forget(udid))
+        XCTAssertTrue(registry.states().isEmpty)
+        XCTAssertFalse(registry.forget(udid))
+    }
+
     func testDetachKeepsKnownDeviceAsUnreachable() {
         var registry = DeviceRegistry()
         registry.applyConnections([ConnectedDevice(udid: udid, connection: .usb)], now: t0)

@@ -12,6 +12,9 @@ public final class BackupMessageHandler {
         /// Give up when the device sends nothing for this long in the middle of a transfer.
         public var stallTimeout: TimeInterval = 300
         public var chunkSize = 32 * 1024
+        /// Free-space sources (overridable in tests); see `DiskSpace.availableBytes`.
+        public var importantUsageSpace: @Sendable (URL) -> Int64? = DiskSpace.liveImportantUsage
+        public var systemFreeSpace: @Sendable (URL) -> UInt64? = DiskSpace.liveSystemFree
         public init() {}
     }
 
@@ -417,12 +420,8 @@ public final class BackupMessageHandler {
     // MARK: - Small request/response messages
 
     private func sendFreeDiskSpace() throws {
-        var probe = root
-        while !fm.fileExists(atPath: probe.path), probe.pathComponents.count > 1 {
-            probe = probe.deletingLastPathComponent()
-        }
-        if let attributes = try? fm.attributesOfFileSystem(forPath: probe.path),
-           let free = (attributes[.systemFreeSize] as? NSNumber)?.uint64Value {
+        // Same measure as Finder: includes purgeable APFS space (see `DiskSpace`).
+        if let free = DiskSpace.availableBytes(at: root, importantUsage: config.importantUsageSpace, systemFree: config.systemFreeSpace) {
             try transport.sendStatusResponse(code: 0, description: nil, payload: free)
         } else {
             try transport.sendStatusResponse(code: -1, description: nil, payload: UInt64(0))

@@ -72,6 +72,25 @@ final class BackupMessageHandlerTests: XCTestCase {
         XCTAssertGreaterThan((transport.statuses[0].payload as? UInt64) ?? 0, 0)
     }
 
+    func testGetFreeDiskSpaceUsesCapacityForImportantUsage() throws {
+        var config = BackupMessageHandler.Config()
+        config.importantUsageSpace = { _ in 123_456_789 }
+        config.systemFreeSpace = { _ in 1_000 }
+        let handler = BackupMessageHandler(root: root, transport: transport, config: config)
+        _ = try handler.handle(message(["DLMessageGetFreeDiskSpace"]))
+        XCTAssertEqual(transport.statuses[0].code, 0)
+        XCTAssertEqual(transport.statuses[0].payload as? UInt64, 123_456_789)
+    }
+
+    func testGetFreeDiskSpaceFallsBackToSystemFree() throws {
+        var config = BackupMessageHandler.Config()
+        config.importantUsageSpace = { _ in nil }
+        config.systemFreeSpace = { _ in 4_242 }
+        let handler = BackupMessageHandler(root: root, transport: transport, config: config)
+        _ = try handler.handle(message(["DLMessageGetFreeDiskSpace"]))
+        XCTAssertEqual(transport.statuses[0].payload as? UInt64, 4_242)
+    }
+
     func testPurgeDiskSpaceIsRefused() throws {
         _ = try makeHandler().handle(message(["DLMessagePurgeDiskSpace"]))
         XCTAssertEqual(transport.statuses[0].code, -1)

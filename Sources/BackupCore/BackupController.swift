@@ -53,7 +53,7 @@ public struct BackupResult: Equatable, Sendable {
 }
 
 /// Runs manual backups: one per device at a time, keeps the Mac awake, reports progress/results and
-/// sends notifications. The scheduler (M3) will use the same entry point.
+/// sends notifications. Manual "Back up now" and the scheduler use the same `start` entry point.
 @MainActor
 public final class BackupController: ObservableObject {
     @Published public private(set) var jobs: [String: BackupJob] = [:]
@@ -66,8 +66,11 @@ public final class BackupController: ObservableObject {
     private let sleepBlocker: SleepBlocking?
     private let destinationRoot: URL
     private let passcodeWaitSeconds: TimeInterval
+    private let passcodeWaitProvider: ((String) -> TimeInterval)?
     private let clock: @Sendable () -> Date
     private var tasks: [String: Task<Void, Never>] = [:]
+    /// Devices whose "unlock your iPhone" notification was already posted in the current run.
+    private var passcodeNotified: Set<String> = []
 
     public init(
         engine: BackupEngine = LibimobiledeviceBackupEngine(),
@@ -75,6 +78,7 @@ public final class BackupController: ObservableObject {
         sleepBlocker: SleepBlocking? = IOKitSleepBlocker(),
         destinationRoot: URL = BackupFolder.defaultRoot,
         passcodeWaitSeconds: TimeInterval = 300,
+        passcodeWaitProvider: ((String) -> TimeInterval)? = nil,
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.engine = engine
@@ -82,6 +86,7 @@ public final class BackupController: ObservableObject {
         self.sleepBlocker = sleepBlocker
         self.destinationRoot = destinationRoot
         self.passcodeWaitSeconds = passcodeWaitSeconds
+        self.passcodeWaitProvider = passcodeWaitProvider
         self.clock = clock
     }
 
@@ -100,6 +105,7 @@ public final class BackupController: ObservableObject {
         let startedAt = clock()
         if jobs.isEmpty { sleepBlocker?.begin(reason: "Backing up an iPhone") }
         results[udid] = nil
+        passcodeNotified.remove(udid)
         jobs[udid] = BackupJob(
             udid: udid, deviceName: name, phase: .connecting, fraction: nil,
             message: "Connecting…", startedAt: startedAt)
@@ -107,7 +113,7 @@ public final class BackupController: ObservableObject {
 
         let target = BackupTarget(
             udid: udid, connection: connection, destinationRoot: destinationRoot,
-            passcodeWaitSeconds: passcodeWaitSeconds)
+            passcodeWaitSeconds: passcodeWaitProvider?(udid) ?? passcodeWaitSeconds)
         let relay = ProgressRelay()
         let engine = self.engine
         tasks[udid] = Task { [weak self] in
@@ -147,12 +153,12 @@ public final class BackupController: ObservableObject {
 
     private func apply(_ progress: BackupProgress, udid: String) {
         guard var job = jobs[udid] else { return }
-        let previous = job.phase
         job.phase = progress.phase
         job.fraction = progress.fraction
         job.message = progress.message
         jobs[udid] = job
-        if progress.phase == .waitingForPasscode, previous != .waitingForPasscode {
+        // At most one passcode notification per run, even when the device asks again.
+        if progress.phase == .waitingForPasscode, passcodeNotified.insert(udid).inserted {
             notifier?.backupNeedsPasscode(deviceName: job.deviceName)
         }
     }
@@ -184,6 +190,7 @@ public final class BackupController: ObservableObject {
         results[udid] = BackupResult(kind: kind, finishedAt: finished, duration: duration)
         jobs[udid] = nil
         tasks[udid] = nil
+        passcodeNotified.remove(udid)
         if jobs.isEmpty { sleepBlocker?.end() }
         onFinished?()
     }

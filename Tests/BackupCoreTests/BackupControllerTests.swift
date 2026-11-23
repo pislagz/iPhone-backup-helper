@@ -149,4 +149,50 @@ final class BackupControllerTests: XCTestCase {
         await waitUntil { controller.jobs.isEmpty }
         XCTAssertEqual(notifier.events.filter { $0.hasPrefix("passcode") }, ["passcode:Phone U1"])
     }
+
+    func testPasscodeNotificationOncePerRunEvenWhenTheDeviceAsksAgain() async {
+        let notifier = FakeNotifier()
+        let controller = BackupController(
+            engine: ClosureEngine { _, progress in
+                progress(BackupProgress(fraction: nil, message: "Unlock", phase: .waitingForPasscode))
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                progress(BackupProgress(fraction: 0.1, message: "Backing up", phase: .transferring))
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                progress(BackupProgress(fraction: nil, message: "Unlock", phase: .waitingForPasscode))
+                try? await Task.sleep(nanoseconds: 30_000_000)
+                return BackupSummary(duration: 1, bytesWritten: 0)
+            },
+            notifier: notifier, sleepBlocker: nil)
+        controller.start(device())
+        await waitUntil { controller.jobs.isEmpty }
+        XCTAssertEqual(notifier.events.filter { $0.hasPrefix("passcode") }.count, 1)
+
+        // A new run may notify again.
+        controller.start(device())
+        await waitUntil { controller.jobs.isEmpty }
+        XCTAssertEqual(notifier.events.filter { $0.hasPrefix("passcode") }.count, 2)
+    }
+
+    func testPerDevicePasscodeWaitReachesTheEngine() async {
+        let seen = Seen()
+        let controller = BackupController(
+            engine: ClosureEngine { target, _ in
+                seen.append(target.passcodeWaitSeconds)
+                return BackupSummary(duration: 1, bytesWritten: 0)
+            },
+            notifier: nil, sleepBlocker: nil, passcodeWaitSeconds: 300,
+            passcodeWaitProvider: { $0 == "U1" ? 90 : 600 })
+        controller.start(device("U1"))
+        await waitUntil { controller.jobs.isEmpty }
+        controller.start(device("U2"))
+        await waitUntil { controller.jobs.isEmpty }
+        XCTAssertEqual(seen.values, [90, 600])
+    }
+}
+
+private final class Seen: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [TimeInterval] = []
+    func append(_ value: TimeInterval) { lock.lock(); items.append(value); lock.unlock() }
+    var values: [TimeInterval] { lock.lock(); defer { lock.unlock() }; return items }
 }
