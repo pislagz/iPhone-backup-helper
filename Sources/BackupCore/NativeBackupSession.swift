@@ -100,6 +100,9 @@ final class NativeBackupSession: BackupDeviceSession, @unchecked Sendable {
     // MARK: - Connecting
 
     func connect() throws {
+        guard NativeDeviceBackend.connectionIsLocal(udid: target.udid, connection: target.connection) else {
+            throw BackupError.failed("The iPhone is not reachable on a local connection.")
+        }
         var newDevice: idevice_t? = nil
         let lookup = target.connection == .usb ? IDEVICE_LOOKUP_USBMUX.rawValue : IDEVICE_LOOKUP_NETWORK.rawValue
         let found = idevice_new_with_options(&newDevice, target.udid, idevice_options(rawValue: lookup))

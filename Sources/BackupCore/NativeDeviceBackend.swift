@@ -61,16 +61,70 @@ public final class NativeDeviceBackend: DeviceBackend {
         var result: [ConnectedDevice] = []
         for index in 0..<Int(count) {
             guard let info = list[index], let cUDID = info.pointee.udid else { continue }
-            let connection: ConnectionType =
-                info.pointee.conn_type.rawValue == CONNECTION_NETWORK.rawValue ? .wifi : .usb
-            result.append(ConnectedDevice(udid: String(cString: cUDID), connection: connection))
+            let isNetwork = info.pointee.conn_type.rawValue == CONNECTION_NETWORK.rawValue
+            if isNetwork, !networkAddressIsLocal(info) {
+                log.error("ignoring a Wi-Fi device with a non-local address")
+                continue
+            }
+            result.append(ConnectedDevice(udid: String(cString: cUDID), connection: isNetwork ? .wifi : .usb))
         }
         return result
+    }
+
+    // MARK: - Local-network guard
+
+    /// Whether the address libimobiledevice would open a TCP connection to is loopback, link-local,
+    /// RFC 1918 or IPv6 unique-local (`LocalAddressPolicy`). Unknown address family or no address: no.
+    private static func networkAddressIsLocal(_ info: idevice_info_t) -> Bool {
+        guard let data = info.pointee.conn_data else { return false }
+        let family = Int32(data.assumingMemoryBound(to: sockaddr.self).pointee.sa_family)
+        switch family {
+        case AF_INET:
+            var address = data.assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr
+            return LocalAddressPolicy.isAllowedIPv4(withUnsafeBytes(of: &address) { Array($0) })
+        case AF_INET6:
+            var address = data.assumingMemoryBound(to: sockaddr_in6.self).pointee.sin6_addr
+            return LocalAddressPolicy.isAllowedIPv6(withUnsafeBytes(of: &address) { Array($0) })
+        default:
+            return false
+        }
+    }
+
+    /// Call right before opening a device with `idevice_new_with_options`: true when the connection
+    /// would go over USB (via usbmuxd) or to a local address only. `connection == nil` means "whatever
+    /// libimobiledevice picks" (USB wins when present). Refuses when the device is not listed.
+    static func connectionIsLocal(udid: String, connection: ConnectionType?) -> Bool {
+        var list: UnsafeMutablePointer<idevice_info_t?>? = nil
+        var count: Int32 = 0
+        guard idevice_get_device_list_extended(&list, &count).rawValue == 0, let list else { return false }
+        defer { idevice_device_list_extended_free(list) }
+
+        var hasUSB = false
+        var hasNetwork = false
+        var allNetworkLocal = true
+        for index in 0..<Int(count) {
+            guard let info = list[index], let cUDID = info.pointee.udid, String(cString: cUDID) == udid else { continue }
+            if info.pointee.conn_type.rawValue == CONNECTION_NETWORK.rawValue {
+                hasNetwork = true
+                if !networkAddressIsLocal(info) { allNetworkLocal = false }
+            } else {
+                hasUSB = true
+            }
+        }
+        let networkOK = hasNetwork && allNetworkLocal
+        switch connection {
+        case .usb?: return hasUSB
+        case .wifi?: return networkOK
+        case nil: return hasUSB || networkOK
+        }
     }
 
     // MARK: - Lockdown
 
     private static func readDetailsBlocking(udid: String) -> DeviceReadResult {
+        guard connectionIsLocal(udid: udid, connection: nil) else {
+            return .failure(.unreachable("device not found"))
+        }
         var device: idevice_t? = nil
         // USB and network; libimobiledevice prefers USB when both exist.
         let options = idevice_options(rawValue: IDEVICE_LOOKUP_USBMUX.rawValue | IDEVICE_LOOKUP_NETWORK.rawValue)

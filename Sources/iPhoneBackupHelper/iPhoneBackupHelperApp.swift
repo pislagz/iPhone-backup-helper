@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
+        OfflineGuard.sanitizeEnvironment() // before any library call
         AppLog.shared.log(.info, "app", "iPhone Backup Helper started")
         let settings = SettingsStore()
         let monitor = DeviceMonitor()

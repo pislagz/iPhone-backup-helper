@@ -74,7 +74,26 @@ for f in "$APP/Contents/Frameworks/"*.dylib; do codesign --force -s - "$f"; done
 codesign --force --deep -s - "$APP"
 codesign --verify --deep --strict "$APP"
 
-ditto -c -k --keepParent "$APP" "$DIST/iPhone-Backup-Helper.zip"
+# The deliverable zip: the app plus a short INSTALL.txt (ditto keeps modes, symlinks and signatures).
+STAGE="$DIST/stage"
+rm -rf "$STAGE"; mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/$APP_NAME.app"
+cat > "$STAGE/INSTALL.txt" <<'TXT'
+iPhone Backup Helper - install
+
+1. Move "iPhone Backup Helper.app" to /Applications.
+2. Right-click the app > Open > Open (once; the app is ad-hoc signed, not notarized).
+   If macOS still refuses: System Settings > Privacy & Security > "Open Anyway".
+3. System Settings > Privacy & Security > Full Disk Access: add the app and switch it on,
+   then quit and reopen the app.
+4. Connect the iPhone and tap "Trust" on it.
+5. For Wi-Fi backups: in Finder select the iPhone and tick "Show this iPhone when on Wi-Fi".
+
+Licenses of the bundled libraries: iPhone Backup Helper.app/Contents/Resources/Licenses/
+Full documentation: README.md in the source repository.
+TXT
+(cd "$STAGE" && ditto -c -k . "$DIST/iPhone-Backup-Helper.zip")
+rm -rf "$STAGE"
 echo "built: $APP"
 lipo -archs "$EXE"
 otool -L "$EXE"
