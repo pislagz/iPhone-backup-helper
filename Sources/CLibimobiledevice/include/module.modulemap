@@ -1,0 +1,4 @@
+module CLibimobiledevice [system] {
+    header "CLibimobiledevice.h"
+    export *
+}

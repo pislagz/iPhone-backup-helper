@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [mvp]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          swift --version
+          xcodebuild -version
+          uname -m
+
+      - name: Build tools (Homebrew, build time only)
+        run: brew install autoconf automake libtool pkg-config
+
+      - name: Cache vendored C libraries
+        id: cache-vendor
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-deps.sh') }}
+
+      - name: Build C libraries (universal)
+        if: steps.cache-vendor.outputs.cache-hit != 'true'
+        run: scripts/build-deps.sh
+
+      - name: Show vendored libraries
+        run: |
+          ls -l vendor/lib
+          for f in vendor/lib/*.dylib; do [ -L "$f" ] || { echo "== $f"; lipo -archs "$f"; otool -L "$f"; }; done
+
+      - name: Swift build (debug)
+        run: swift build
+
+      - name: Swift test
+        run: swift test
+
+      - name: Make app bundle
+        run: scripts/make-app.sh
+
+      - name: Offline check
+        run: scripts/check-offline.sh
+
+      - name: Launch smoke test
+        run: |
+          # The app is a menu-bar agent; make sure it starts, loads its dylibs and stays alive.
+          "dist/iPhone Backup Helper.app/Contents/MacOS/iPhoneBackupHelper" &
+          pid=$!
+          sleep 8
+          if kill -0 $pid 2>/dev/null; then echo "app is running"; kill $pid; else echo "app exited early"; wait $pid; exit 1; fi
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPhone-Backup-Helper
+          path: dist/iPhone-Backup-Helper.zip
+          if-no-files-found: error
