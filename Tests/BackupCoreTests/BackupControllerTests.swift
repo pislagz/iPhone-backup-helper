@@ -260,14 +260,14 @@ final class BackupQueueAndAbortTests: XCTestCase {
         XCTAssertEqual(Set(controller.results.keys), ["A", "B", "C"])
     }
 
-    func testCancellingAQueuedDeviceJustRemovesIt() async {
+    func testCancellingAQueuedDeviceRemovesItAndRecordsTheCancel() async {
         let engine = CleanupEngine()
         let controller = BackupController(engine: engine, notifier: nil, sleepBlocker: nil)
         controller.start(device("A"))
         controller.start(device("B"))
         controller.cancel(udid: "B")
         XCTAssertTrue(controller.queue.isEmpty)
-        XCTAssertNil(controller.results["B"])
+        XCTAssertEqual(controller.results["B"]?.kind, .cancelled, "the user's cancel is shown and gates the retry")
         controller.cancel(udid: "A")
         await waitUntil { controller.jobs.isEmpty }
         XCTAssertEqual(engine.started, ["A"], "the cancelled queue entry never started")
