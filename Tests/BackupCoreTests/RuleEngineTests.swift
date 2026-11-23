@@ -147,7 +147,7 @@ final class RuleEngineTests: XCTestCase {
     func testWeeklyMidnightWindowBelongsToTheStartDay() {
         // Saturday 22:00-02:00; Sunday 01:00 is still Saturday's window.
         let s = settings { $0.frequency = .weekly; $0.weeklyDays = [7]; $0.windowStartMinute = 22 * 60; $0.windowEndMinute = 2 * 60 }
-        XCTAssertEqual(decide(local("2026-03-28 21:00"), settings: s), .skip("Next: today 22:00–02:00"))
+        XCTAssertEqual(decide(local("2026-03-28 21:00"), settings: s), .skip("Next: today 22:00–03:00"))
         XCTAssertEqual(decide(local("2026-03-29 00:30"), settings: s), .run)
     }
 
